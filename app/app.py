@@ -3,7 +3,7 @@ Flask Application Factory
 """
 import logging
 import os
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_login import LoginManager
 
 from .config import config
