@@ -78,12 +78,7 @@ def create_app(config_name: str | None = None) -> Flask:
     # Global error handlers
     @app.errorhandler(404)
     def not_found(e):
-        return jsonify({
-            "error": "Not found",
-            "requested_path": request.path,
-            "path_info": request.environ.get("PATH_INFO"),
-            "headers": dict(request.headers),
-        }), 404
+        return jsonify({"error": "Not found"}), 404
 
     @app.errorhandler(Exception)
     def handle_exception(e):

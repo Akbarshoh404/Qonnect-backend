@@ -1,8 +1,8 @@
 {
   "rewrites": [
     {
-      "source": "/:match*",
-      "destination": "/api/index.py"
+      "source": "/(.*)",
+      "destination": "/api/index.py?__path__=/$1"
     }
   ]
 }
