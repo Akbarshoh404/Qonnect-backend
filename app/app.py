@@ -85,13 +85,14 @@ def create_app(config_name: str | None = None) -> Flask:
             "raw_uri": request.environ.get("REQUEST_URI") or request.environ.get("RAW_URI"),
         }), 404
 
-    @app.errorhandler(500)
-    def internal_error(e):
+    @app.errorhandler(Exception)
+    def handle_exception(e):
         import traceback
-        app.logger.error(f"Internal server error: {e}")
+        app.logger.error(f"Unhandled Exception: {e}")
         return jsonify({
-            "error": "Internal server error",
-            "detail": str(e),
+            "error": "Internal Server Error",
+            "exception_type": type(e).__name__,
+            "message": str(e),
             "traceback": traceback.format_exc()
         }), 500
 
