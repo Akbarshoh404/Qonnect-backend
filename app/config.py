@@ -4,20 +4,23 @@ Qonnect Configuration
 import os
 from dotenv import load_dotenv
 
+import tempfile
+
 load_dotenv()
 
 
 def _get_database_url() -> str:
-    url = os.environ.get("DATABASE_URL", "sqlite:///qonnect.db")
-    # Fix for postgres:// prefix deprecated in SQLAlchemy (if PostgreSQL is used)
-    if url.startswith("postgres://"):
-        url = url.replace("postgres://", "postgresql://", 1)
+    url = os.environ.get("DATABASE_URL")
+    if url:
+        if url.startswith("postgres://"):
+            return url.replace("postgres://", "postgresql://", 1)
+        return url
     # Serverless runtime (Vercel/Lambda) filesystem is read-only except /tmp
-    if os.environ.get("VERCEL") and url.startswith("sqlite:///"):
-        relative = url.replace("sqlite:///", "")
-        if not relative.startswith("/"):
-            return f"sqlite:////tmp/{relative}"
-    return url
+    if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+        tmp_dir = tempfile.gettempdir()
+        db_file = os.path.join(tmp_dir, "qonnect.db").replace("\\", "/")
+        return f"sqlite:///{db_file}"
+    return "sqlite:///qonnect.db"
 
 
 class Config:
