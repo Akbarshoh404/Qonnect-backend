@@ -3,6 +3,7 @@ Qonnect Backend - Flask Application WSGI Entrypoint
 """
 import os
 import sys
+import json
 
 root_dir = os.path.dirname(os.path.abspath(__file__))
 if root_dir not in sys.path:
@@ -21,16 +22,21 @@ with flask_app.app_context():
 
 
 def app(environ, start_response):
-    raw_uri = (
-        environ.get("REQUEST_URI")
-        or environ.get("RAW_URI")
-        or environ.get("HTTP_X_FORWARDED_URI")
-        or environ.get("HTTP_X_MATCHED_PATH")
-    )
+    path = environ.get("PATH_INFO", "")
+    req_uri = environ.get("REQUEST_URI", "") or environ.get("RAW_URI", "")
+    if "debug" in path or "debug" in req_uri:
+        start_response("200 OK", [("Content-Type", "application/json")])
+        safe_env = {
+            k: str(v)
+            for k, v in environ.items()
+            if "SECRET" not in k and "KEY" not in k and "PASS" not in k and "TOKEN" not in k
+        }
+        return [json.dumps(safe_env, indent=2).encode("utf-8")]
+
+    raw_uri = req_uri or environ.get("HTTP_X_FORWARDED_URI") or environ.get("HTTP_X_MATCHED_PATH")
     if raw_uri:
         path_only = raw_uri.split("?")[0]
-        curr_path = environ.get("PATH_INFO", "")
-        if curr_path in ("/api/index.py", "/api/index", "/wsgi.py", "/wsgi", "/api", "") or curr_path != path_only:
+        if path_only and path_only != path:
             environ["PATH_INFO"] = path_only
 
     return flask_app(environ, start_response)
