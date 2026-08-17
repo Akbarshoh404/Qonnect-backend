@@ -140,13 +140,48 @@ def google_callback():
 
 
 @auth_bp.route("/me")
-@login_required
 def get_me():
     """Get current authenticated user info."""
     from app.storage import google_drive_provider
+    from flask import session
+
+    user = None
+    if current_user.is_authenticated:
+        user = current_user
+    elif session.get("user_data"):
+        # Reconstruct user object directly from cryptographically signed session
+        ud = session["user_data"]
+        user_id = ud.get("id")
+        if user_id:
+            try:
+                user = User.query.get(int(user_id))
+            except Exception:
+                user = None
+
+        if not user and user_id:
+            try:
+                user = User(
+                    id=int(user_id),
+                    google_sub=ud.get("sub", ""),
+                    email=ud.get("email", ""),
+                    name=ud.get("name"),
+                    avatar_url=ud.get("picture"),
+                    drive_folder_id=ud.get("drive_folder_id"),
+                    google_tokens_encrypted=ud.get("tokens"),
+                )
+                db.session.merge(user)
+                db.session.commit()
+                login_user(user, remember=True)
+            except Exception as e:
+                logger.warning(f"Failed to merge user in get_me: {e}")
+                db.session.rollback()
+
+    if not user:
+        return jsonify({"error": "Authentication required"}), 401
+
     return jsonify({
-        "user": current_user.to_dict(),
-        "drive_connected": google_drive_provider.is_connected(current_user),
+        "user": user.to_dict(),
+        "drive_connected": google_drive_provider.is_connected(user),
     })
 
 
