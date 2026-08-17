@@ -11,11 +11,29 @@ if root_dir not in sys.path:
 from app import create_app
 from app.extensions import db
 
-app = create_app("production" if os.environ.get("VERCEL") else None)
-application = app
+flask_app = create_app("production" if os.environ.get("VERCEL") else None)
 
-with app.app_context():
+with flask_app.app_context():
     try:
         db.create_all()
     except Exception as e:
-        app.logger.warning(f"db.create_all warning: {e}")
+        flask_app.logger.warning(f"db.create_all warning: {e}")
+
+
+def app(environ, start_response):
+    raw_uri = (
+        environ.get("REQUEST_URI")
+        or environ.get("RAW_URI")
+        or environ.get("HTTP_X_FORWARDED_URI")
+        or environ.get("HTTP_X_MATCHED_PATH")
+    )
+    if raw_uri:
+        path_only = raw_uri.split("?")[0]
+        curr_path = environ.get("PATH_INFO", "")
+        if curr_path in ("/api/index.py", "/api/index", "/wsgi.py", "/wsgi", "/api", "") or curr_path != path_only:
+            environ["PATH_INFO"] = path_only
+
+    return flask_app(environ, start_response)
+
+
+application = app
