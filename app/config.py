@@ -7,13 +7,26 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _get_database_url() -> str:
+    url = os.environ.get("DATABASE_URL", "sqlite:///qonnect.db")
+    # Fix for postgres:// prefix deprecated in SQLAlchemy (if PostgreSQL is used)
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
+    # Serverless runtime (Vercel/Lambda) filesystem is read-only except /tmp
+    if os.environ.get("VERCEL") and url.startswith("sqlite:///"):
+        relative = url.replace("sqlite:///", "")
+        if not relative.startswith("/"):
+            return f"sqlite:////tmp/{relative}"
+    return url
+
+
 class Config:
     # Flask
     SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-in-production")
     DEBUG = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
 
     # Database
-    SQLALCHEMY_DATABASE_URI = os.environ.get("DATABASE_URL", "sqlite:///qonnect.db")
+    SQLALCHEMY_DATABASE_URI = _get_database_url()
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
     # CORS — frontend origin (used for CORS + OAuth redirects)
