@@ -5,10 +5,14 @@ import os
 import sys
 import traceback
 
-# Add backend directory to sys.path so 'app' package imports work cleanly
-backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if backend_dir not in sys.path:
-    sys.path.insert(0, backend_dir)
+# Ensure all possible module paths are added so 'app' package is found
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+cwd = os.getcwd()
+
+for p in (parent_dir, current_dir, cwd, "/var/task", "/var/task/app"):
+    if p and p not in sys.path and os.path.exists(p):
+        sys.path.insert(0, p)
 
 try:
     from app import create_app
@@ -17,7 +21,7 @@ try:
     # Create Flask application instance
     app = create_app("production" if os.environ.get("VERCEL") else None)
 
-    # Initialize database tables
+    # Initialize database tables on cold start
     with app.app_context():
         try:
             db.create_all()
