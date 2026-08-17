@@ -4,7 +4,7 @@ This is the most performance-critical endpoint.
 """
 import logging
 from datetime import datetime, timezone
-from flask import Blueprint, request, redirect, render_template_string, current_app, Response
+from flask import Blueprint, request, redirect, render_template_string, current_app, Response, jsonify
 
 from app.extensions import db, limiter
 from app.models import QrLink, CustomDomain, ScanEvent
@@ -178,11 +178,14 @@ def resolve_custom_domain_qr(short_code: str):
     host = request.host.split(":")[0]
     response_headers = {"X-Robots-Tag": "noindex, nofollow"}
 
-    # Only handle custom domain requests here (not the default domain)
+    # Ignore system reserved words and routes
+    if short_code in ("api", "health", "favicon.ico", "robots.txt", "dashboard", "login", "create", "settings", "admin", "q"):
+        return jsonify({"error": "Not found"}), 404
+
+    # Only handle custom domain requests here (not the default domain or api domain)
     default_domain = current_app.config.get("DEFAULT_DOMAIN", "")
-    if host == default_domain or host in ("localhost", "127.0.0.1"):
-        # This would conflict with frontend routes — skip
-        return Response("Not found", status=404)
+    if host in (default_domain, "qonnect-api.akbarshoh-dev.uz", "qonnect.akbarshoh-dev.uz", "localhost", "127.0.0.1"):
+        return jsonify({"error": "Not found"}), 404
 
     domain = CustomDomain.query.filter_by(domain=host, verified=True).first()
     if not domain:
