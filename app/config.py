@@ -107,10 +107,10 @@ class DevelopmentConfig(Config):
 
 class ProductionConfig(Config):
     DEBUG = False
-    # Cross-origin cookies: frontend (qonnect.akbarshoh-dev.uz) ≠ backend (qonnect-api.akbarshoh-dev.uz)
-    # Must use SameSite=None + Secure so the browser sends the session cookie cross-origin
     SESSION_COOKIE_SECURE = True
-    SESSION_COOKIE_SAMESITE = "None"
+    SESSION_COOKIE_SAMESITE = "Lax"
+    # Share cookies across both frontend (qonnect.akbarshoh-dev.uz) and backend (qonnect-api.akbarshoh-dev.uz)
+    SESSION_COOKIE_DOMAIN = os.environ.get("SESSION_COOKIE_DOMAIN", ".akbarshoh-dev.uz")
 
 
 config = {

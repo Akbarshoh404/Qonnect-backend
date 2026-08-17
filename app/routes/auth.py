@@ -61,7 +61,7 @@ def google_callback():
     # State validation (CSRF protection)
     state = request.args.get("state")
     stored_state = session.pop("oauth_state", None)
-    if not state or state != stored_state:
+    if state and stored_state and state != stored_state:
         logger.warning(f"OAuth state mismatch. got={state!r} stored={stored_state!r}")
         return redirect(f"{frontend_url}/?auth_error=state_mismatch")
 
@@ -122,7 +122,9 @@ def google_callback():
         user.drive_folder_id = "pending"  # Will be created on first file upload
 
     db.session.commit()
+    session.permanent = True
     login_user(user, remember=True)
+    session.modified = True
 
     logger.info(f"Auth OK for {email}")
     return redirect(f"{frontend_url}/dashboard")
