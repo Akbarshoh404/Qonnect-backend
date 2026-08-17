@@ -82,7 +82,7 @@ def create_app(config_name: str | None = None) -> Flask:
             "error": "Not found",
             "requested_path": request.path,
             "path_info": request.environ.get("PATH_INFO"),
-            "raw_uri": request.environ.get("REQUEST_URI") or request.environ.get("RAW_URI"),
+            "headers": dict(request.headers),
         }), 404
 
     @app.errorhandler(Exception)
