@@ -70,6 +70,8 @@ def create_app(config_name: str | None = None) -> Flask:
 
     # Health check
     @app.route("/api/health")
+    @app.route("/health")
+    @app.route("/")
     def health():
         return jsonify({"status": "ok", "service": "qonnect"})
 
