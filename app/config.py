@@ -16,14 +16,14 @@ class Config:
     SQLALCHEMY_DATABASE_URI = os.environ.get("DATABASE_URL", "sqlite:///qonnect.db")
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
-    # CORS
+    # CORS — frontend origin (used for CORS + OAuth redirects)
     FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
 
     # Google OAuth
     GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
     GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
     GOOGLE_REDIRECT_URI = os.environ.get(
-        "GOOGLE_REDIRECT_URI", "http://localhost:5000/api/auth/callback"
+        "GOOGLE_REDIRECT_URI", "http://localhost:5173/api/auth/callback"
     )
 
     # App
@@ -31,7 +31,7 @@ class Config:
     DEFAULT_DOMAIN = os.environ.get("DEFAULT_DOMAIN", "localhost:5173")
 
     # Storage
-    MAX_FILE_SIZE = int(os.environ.get("MAX_FILE_SIZE", str(50 * 1024 * 1024)))  # 50MB default
+    MAX_FILE_SIZE = int(os.environ.get("MAX_FILE_SIZE", str(50 * 1024 * 1024)))  # 50MB
     ALLOWED_MIME_TYPES = [
         # Documents
         "application/pdf",
@@ -60,8 +60,8 @@ class Config:
         "video/quicktime",
     ]
 
-    # Security
-    SESSION_COOKIE_SECURE = os.environ.get("FLASK_ENV") == "production"
+    # Security — defaults for dev; production overrides below
+    SESSION_COOKIE_SECURE = False
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = "Lax"
     PERMANENT_SESSION_LIFETIME = 86400 * 30  # 30 days
@@ -86,11 +86,15 @@ class Config:
 class DevelopmentConfig(Config):
     DEBUG = True
     SESSION_COOKIE_SECURE = False
+    SESSION_COOKIE_SAMESITE = "Lax"
 
 
 class ProductionConfig(Config):
     DEBUG = False
+    # Cross-origin cookies: frontend (qonnect.akbarshoh-dev.uz) ≠ backend (qonnect-api.akbarshoh-dev.uz)
+    # Must use SameSite=None + Secure so the browser sends the session cookie cross-origin
     SESSION_COOKIE_SECURE = True
+    SESSION_COOKIE_SAMESITE = "None"
 
 
 config = {

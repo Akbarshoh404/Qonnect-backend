@@ -168,9 +168,18 @@ def drive_connect():
 
 def _get_callback_uri() -> str:
     """
-    Return the callback URI. We always use the frontend proxy base so that
-    the session cookie (bound to the frontend origin) is present on callback.
+    Return the OAuth callback URI.
+
+    - Production: GOOGLE_REDIRECT_URI is set explicitly to the backend domain
+      (e.g. https://qonnect-api.akbarshoh-dev.uz/api/auth/callback)
+      and must be registered in Google Cloud Console.
+    - Development: Falls back to frontend proxy path so session cookie stays
+      on the same origin as the Vite dev server (localhost:5173).
     """
+    explicit = current_app.config.get("GOOGLE_REDIRECT_URI", "")
+    if explicit:
+        return explicit
+
+    # Dev fallback — Vite proxies /api/* to Flask
     frontend_url = current_app.config.get("FRONTEND_URL", "http://localhost:5173")
-    # The Vite dev server proxies /api/* to Flask, so the browser sees :5173
     return f"{frontend_url}/api/auth/callback"
