@@ -87,8 +87,13 @@ def create_app(config_name: str | None = None) -> Flask:
 
     @app.errorhandler(500)
     def internal_error(e):
+        import traceback
         app.logger.error(f"Internal server error: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({
+            "error": "Internal server error",
+            "detail": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
 
     @app.errorhandler(429)
     def rate_limit_exceeded(e):
