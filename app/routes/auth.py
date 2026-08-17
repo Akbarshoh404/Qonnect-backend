@@ -139,14 +139,26 @@ def get_me():
     })
 
 
-@auth_bp.route("/logout", methods=["POST"])
-@login_required
+@auth_bp.route("/logout", methods=["POST", "GET"])
 def logout():
-    """Log out the current user."""
-    logger.info(f"Logout: {current_user.email}")
-    logout_user()
+    """Log out the current user and clear all auth cookies."""
+    if current_user.is_authenticated:
+        logger.info(f"Logout: {current_user.email}")
+        logout_user()
     session.clear()
-    return jsonify({"message": "Logged out successfully"})
+
+    resp = jsonify({"message": "Logged out successfully"})
+    is_prod = current_app.config.get("ENV") == "production" or not current_app.config.get("DEBUG")
+    samesite = "None" if is_prod else "Lax"
+    secure = is_prod
+
+    # Explicitly clear both session and remember cookies with both Lax and None to ensure cleanup
+    for name in ("session", "remember_token", "remember"):
+        resp.delete_cookie(name, path="/", secure=secure, samesite=samesite)
+        resp.delete_cookie(name, path="/", secure=False, samesite="Lax")
+        resp.delete_cookie(name, path="/")
+
+    return resp
 
 
 @auth_bp.route("/drive/connect")
