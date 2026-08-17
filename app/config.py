@@ -10,17 +10,19 @@ load_dotenv()
 
 
 def _get_database_url() -> str:
-    url = os.environ.get("DATABASE_URL")
-    if url:
-        if url.startswith("postgres://"):
-            return url.replace("postgres://", "postgresql://", 1)
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql://", 1)
+    if url.startswith("postgresql://") or url.startswith("mysql://"):
         return url
-    # Serverless runtime (Vercel/Lambda) filesystem is read-only except /tmp
-    if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+
+    # On Vercel / AWS Lambda, filesystem is read-only except /tmp; redirect SQLite to /tmp
+    if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME") or not url:
         tmp_dir = tempfile.gettempdir()
         db_file = os.path.join(tmp_dir, "qonnect.db").replace("\\", "/")
         return f"sqlite:///{db_file}"
-    return "sqlite:///qonnect.db"
+
+    return url
 
 
 class Config:
