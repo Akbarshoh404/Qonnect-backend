@@ -38,7 +38,35 @@ def create_app(config_name: str | None = None) -> Flask:
 
     @login_manager.user_loader
     def load_user(user_id: str):
-        return User.query.get(int(user_id))
+        from flask import session
+        try:
+            user = User.query.get(int(user_id))
+            if user:
+                return user
+        except Exception:
+            pass
+
+        # Rehydrate user across serverless containers using cryptographically signed session data
+        if session.get("user_data"):
+            ud = session["user_data"]
+            try:
+                user = User(
+                    id=int(user_id),
+                    google_sub=ud.get("sub", ""),
+                    email=ud.get("email", ""),
+                    name=ud.get("name"),
+                    avatar_url=ud.get("picture"),
+                    drive_folder_id=ud.get("drive_folder_id"),
+                    google_tokens_encrypted=ud.get("tokens"),
+                )
+                db.session.merge(user)
+                db.session.commit()
+                return user
+            except Exception as e:
+                app.logger.warning(f"Error rehydrating user in serverless container: {e}")
+                db.session.rollback()
+
+        return None
 
     @login_manager.unauthorized_handler
     def unauthorized():

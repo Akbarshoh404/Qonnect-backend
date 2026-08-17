@@ -122,6 +122,15 @@ def google_callback():
         user.drive_folder_id = "pending"  # Will be created on first file upload
 
     db.session.commit()
+    session["user_data"] = {
+        "id": user.id,
+        "sub": user.google_sub,
+        "email": user.email,
+        "name": user.name,
+        "picture": user.avatar_url,
+        "drive_folder_id": user.drive_folder_id,
+        "tokens": user.google_tokens_encrypted,
+    }
     session.permanent = True
     login_user(user, remember=True)
     session.modified = True
