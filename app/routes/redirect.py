@@ -175,11 +175,8 @@ def resolve_custom_domain_qr(short_code: str):
     Handle custom domain QR resolution.
     E.g. files.example.com/Ab82kL → resolves based on hostname.
     """
-    host = request.host.split(":")[0]
-    response_headers = {"X-Robots-Tag": "noindex, nofollow"}
-
-    # Ignore system reserved words and routes
-    if short_code in ("api", "health", "favicon.ico", "robots.txt", "dashboard", "login", "create", "settings", "admin", "q"):
+    # Never intercept system API endpoints, health, or static assets
+    if request.path.startswith("/api") or short_code in ("api", "health", "favicon.ico", "robots.txt", "dashboard", "login", "create", "settings", "admin", "q"):
         return jsonify({"error": "Not found"}), 404
 
     # Only handle custom domain requests here (not the default domain or api domain)
