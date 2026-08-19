@@ -20,6 +20,18 @@ class QrLink(db.Model):
     # Human-readable name
     title = db.Column(db.String(255), nullable=False)
 
+    # Project / Folder organization
+    project_name = db.Column(db.String(100), nullable=True, index=True)
+
+    # Tags list: ["marketing", "table-1", "vip"]
+    tags = db.Column(db.JSON, nullable=True, default=list)
+
+    # QR Design Studio styling config (colors, gradients, dot styles, corner eyes, center logo, CTA frames)
+    style_config = db.Column(db.JSON, nullable=True)
+
+    # Custom branded inactive / 404 fallback page config
+    inactive_config = db.Column(db.JSON, nullable=True)
+
     # For URL type: the current redirect destination
     destination_url = db.Column(db.Text, nullable=True)
 
@@ -63,6 +75,10 @@ class QrLink(db.Model):
             "short_code": self.short_code,
             "type": self.type,
             "title": self.title,
+            "project_name": self.project_name or None,
+            "tags": self.tags or [],
+            "style_config": self.style_config or None,
+            "inactive_config": self.inactive_config or None,
             "is_active": self.is_active,
             "public_url": self.get_public_url(base_url),
             "created_at": self.created_at.isoformat() if self.created_at else None,

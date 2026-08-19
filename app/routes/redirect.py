@@ -1,6 +1,6 @@
 """
 Public redirect route - the core QR resolution engine.
-This is the most performance-critical endpoint.
+Supports branded inactive/404 pages and portfolio attribution.
 """
 import logging
 from datetime import datetime, timezone
@@ -15,42 +15,174 @@ from app.utils.device import parse_user_agent
 logger = logging.getLogger(__name__)
 redirect_bp = Blueprint("redirect", __name__)
 
-# Minimal page shown when QR is disabled or not found
-_DISABLED_PAGE = """<!DOCTYPE html>
+# Luxury Apple-minimalist template for inactive/404 pages with custom branding support
+_BRANDED_PAGE = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Link Unavailable — Qonnect</title>
+    <title>{{ title }} — Qonnect</title>
     <meta name="robots" content="noindex, nofollow">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-               background: #0f0f13; color: #e2e8f0; display: flex;
-               align-items: center; justify-content: center;
-               min-height: 100vh; padding: 1rem; }
-        .card { background: #1a1a2e; border: 1px solid #2d2d3d; border-radius: 16px;
-                padding: 3rem 2rem; text-align: center; max-width: 420px; width: 100%; }
-        .icon { font-size: 3rem; margin-bottom: 1.5rem; }
-        h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.75rem; color: #f1f5f9; }
-        p { color: #94a3b8; font-size: 1rem; line-height: 1.6; }
-        .brand { margin-top: 2rem; font-size: 0.875rem; color: #4a5568; }
-        .brand strong { color: #6366f1; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
+            background: #090c14;
+            color: #f1f5f9;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 1.5rem;
+            position: relative;
+            overflow-x: hidden;
+        }
+        .glow {
+            position: absolute;
+            width: 450px;
+            height: 450px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(99, 102, 241, 0.15), transparent 70%);
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 0;
+            pointer-events: none;
+        }
+        .card {
+            background: rgba(18, 24, 38, 0.85);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 28px;
+            padding: 3rem 2rem;
+            text-align: center;
+            max-width: 460px;
+            width: 100%;
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            position: relative;
+            z-index: 1;
+        }
+        .logo-img {
+            max-height: 56px;
+            margin: 0 auto 1.5rem;
+            display: block;
+            border-radius: 12px;
+        }
+        .icon-badge {
+            width: 56px;
+            height: 56px;
+            border-radius: 18px;
+            background: rgba(99, 102, 241, 0.12);
+            color: #818cf8;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            margin: 0 auto 1.5rem;
+            border: 1px solid rgba(99, 102, 241, 0.25);
+        }
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            margin-bottom: 0.75rem;
+            color: #ffffff;
+        }
+        p {
+            color: #94a3b8;
+            font-size: 0.95rem;
+            line-height: 1.6;
+            margin-bottom: 1.75rem;
+        }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1.5rem;
+            border-radius: 14px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            background: #ffffff;
+            color: #0f172a;
+            text-decoration: none;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+        }
+        .btn:hover {
+            background: #f1f5f9;
+            transform: translateY(-1px);
+        }
+        .footer-brand {
+            margin-top: 2.25rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+            font-size: 0.8rem;
+            color: #64748b;
+        }
+        .footer-brand a {
+            color: #818cf8;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .footer-brand a:hover {
+            text-decoration: underline;
+        }
     </style>
 </head>
 <body>
+    <div class="glow"></div>
     <div class="card">
-        <div class="icon">🔗</div>
+        {% if logo_url %}
+            <img src="{{ logo_url }}" alt="Logo" class="logo-img">
+        {% else %}
+            <div class="icon-badge">🔗</div>
+        {% endif %}
+
         <h1>{{ title }}</h1>
         <p>{{ message }}</p>
-        <div class="brand">Powered by <strong>Qonnect</strong></div>
+
+        {% if support_url %}
+            <a href="{{ support_url }}" class="btn" target="_blank" rel="noopener">
+                {{ support_label or "Contact Support" }} →
+            </a>
+        {% endif %}
+
+        <div class="footer-brand">
+            Powered by <strong>Qonnect</strong> · Made with ❤️ by <a href="https://akbarshoh-dev.uz" target="_blank" rel="noopener">Akbarshoh</a>
+        </div>
     </div>
 </body>
 </html>"""
 
 
+def _render_fallback_page(title: str, message: str, inactive_config: dict = None, status_code: int = 404):
+    inactive_config = inactive_config or {}
+    custom_title = inactive_config.get("title") or title
+    custom_message = inactive_config.get("message") or message
+    logo_url = inactive_config.get("logo_url")
+    support_url = inactive_config.get("support_url")
+    support_label = inactive_config.get("support_label")
+
+    page = render_template_string(
+        _BRANDED_PAGE,
+        title=custom_title,
+        message=custom_message,
+        logo_url=logo_url,
+        support_url=support_url,
+        support_label=support_label,
+    )
+    return Response(
+        page,
+        status=status_code,
+        headers={"X-Robots-Tag": "noindex, nofollow"},
+        content_type="text/html",
+    )
+
+
 def _record_scan(qr_link_id: int) -> None:
-    """Record a scan event. Runs in the same request for simplicity."""
+    """Record a scan event."""
     try:
         ip = request.headers.get("X-Forwarded-For", request.remote_addr or "")
         if "," in ip:
@@ -81,75 +213,46 @@ def _record_scan(qr_link_id: int) -> None:
         db.session.rollback()
 
 
-def _resolve_qr_by_host_and_code(short_code: str) -> QrLink | None:
-    """
-    Resolve a QR link by considering the request hostname.
-    Supports both default domain and custom domains.
-    """
-    host = request.host.split(":")[0]  # strip port
-
-    # Check if this is a custom domain request
-    domain = CustomDomain.query.filter_by(domain=host, verified=True).first()
-
-    if domain:
-        # Custom domain: find QR for this user's domain with this short code
-        return QrLink.query.filter_by(
-            short_code=short_code,
-            custom_domain_id=domain.id,
-        ).first()
-    else:
-        # Default domain: any QR with this short code
-        return QrLink.query.filter_by(short_code=short_code).first()
-
-
 @redirect_bp.route("/q/<short_code>")
 @limiter.limit("120 per minute")
 def resolve_qr(short_code: str):
-    """
-    The core dynamic QR redirect endpoint.
-    Resolves a short code to its current destination and redirects.
-    """
-    # Add SEO robots header
-    response_headers = {"X-Robots-Tag": "noindex, nofollow"}
-
+    """The core dynamic QR redirect endpoint."""
     qr_link = QrLink.query.filter_by(short_code=short_code).first()
 
     if not qr_link:
-        page = render_template_string(
-            _DISABLED_PAGE,
+        return _render_fallback_page(
             title="Link Not Found",
             message="This Qonnect link doesn't exist or may have been removed.",
+            status_code=404,
         )
-        return Response(page, status=404, headers=response_headers, content_type="text/html")
 
     if not qr_link.is_active:
-        page = render_template_string(
-            _DISABLED_PAGE,
-            title="Link Unavailable",
-            message="This Qonnect link is currently disabled.",
+        return _render_fallback_page(
+            title="Link Temporarily Unavailable",
+            message="The owner has paused this QR code. Please check back later.",
+            inactive_config=qr_link.inactive_config,
+            status_code=410,
         )
-        return Response(page, status=410, headers=response_headers, content_type="text/html")
 
-    # Record scan (don't let analytics failure affect the redirect)
+    # Record scan
     _record_scan(qr_link.id)
 
     if qr_link.type == "url":
         return redirect(qr_link.destination_url, 302)
 
     elif qr_link.type == "file":
-        # Serve the file through backend proxy (hides Drive URL)
         try:
             import io
             file_content = google_drive_provider.get_file_content(
                 qr_link.user, qr_link.google_drive_file_id
             )
             if file_content is None:
-                page = render_template_string(
-                    _DISABLED_PAGE,
+                return _render_fallback_page(
                     title="File Unavailable",
-                    message="The file behind this QR code couldn't be retrieved. The owner may need to reconnect their Google Drive.",
+                    message="The file behind this QR code could not be retrieved from Google Drive.",
+                    inactive_config=qr_link.inactive_config,
+                    status_code=503,
                 )
-                return Response(page, status=503, headers=response_headers, content_type="text/html")
 
             from flask import send_file
             return send_file(
@@ -160,64 +263,54 @@ def resolve_qr(short_code: str):
             )
         except Exception as e:
             logger.error(f"File serve failed for {short_code}: {e}")
-            page = render_template_string(
-                _DISABLED_PAGE,
+            return _render_fallback_page(
                 title="File Unavailable",
-                message="The file couldn't be retrieved. Please try again later.",
+                message="The file could not be retrieved. Please try again later.",
+                inactive_config=qr_link.inactive_config,
+                status_code=503,
             )
-            return Response(page, status=503, headers=response_headers, content_type="text/html")
 
 
 @redirect_bp.route("/<short_code>")
 @limiter.limit("120 per minute")
 def resolve_custom_domain_qr(short_code: str):
-    """
-    Handle custom domain QR resolution.
-    E.g. files.example.com/Ab82kL → resolves based on hostname.
-    """
-    # Never intercept system API endpoints, health, or static assets
+    """Handle custom domain QR resolution (e.g. qr.brand.com/xK9z)."""
     if request.path.startswith("/api") or short_code in ("api", "health", "favicon.ico", "robots.txt", "dashboard", "login", "create", "settings", "admin", "q"):
         return jsonify({"error": "Not found"}), 404
 
-    # Only handle custom domain requests here (not the default domain or api domain)
+    host = request.host.split(":")[0]
     default_domain = current_app.config.get("DEFAULT_DOMAIN", "")
+
     if host in (default_domain, "qonnect-api.akbarshoh-dev.uz", "qonnect.akbarshoh-dev.uz", "localhost", "127.0.0.1"):
         return jsonify({"error": "Not found"}), 404
 
     domain = CustomDomain.query.filter_by(domain=host, verified=True).first()
     if not domain:
-        page = render_template_string(
-            _DISABLED_PAGE,
-            title="Domain Not Found",
-            message="This domain is not configured with Qonnect.",
+        return _render_fallback_page(
+            title="Domain Not Verified",
+            message="This custom domain is not registered or verified in Qonnect.",
+            status_code=404,
         )
-        return Response(page, status=404, headers=response_headers, content_type="text/html")
 
-    qr_link = QrLink.query.filter_by(
-        short_code=short_code,
-        custom_domain_id=domain.id,
-    ).first()
-
+    qr_link = QrLink.query.filter_by(short_code=short_code, custom_domain_id=domain.id).first()
     if not qr_link:
-        page = render_template_string(
-            _DISABLED_PAGE,
+        return _render_fallback_page(
             title="Link Not Found",
-            message="This Qonnect link doesn't exist.",
+            message="This QR code link does not exist on this domain.",
+            status_code=404,
         )
-        return Response(page, status=404, headers=response_headers, content_type="text/html")
 
     if not qr_link.is_active:
-        page = render_template_string(
-            _DISABLED_PAGE,
-            title="Link Unavailable",
-            message="This Qonnect link is currently disabled.",
+        return _render_fallback_page(
+            title="Link Temporarily Unavailable",
+            message="This QR code is currently paused by the owner.",
+            inactive_config=qr_link.inactive_config,
+            status_code=410,
         )
-        return Response(page, status=410, headers=response_headers, content_type="text/html")
 
     _record_scan(qr_link.id)
 
     if qr_link.type == "url":
         return redirect(qr_link.destination_url, 302)
     else:
-        # File: forward to standard file serve endpoint
         return redirect(f"/q/{short_code}", 302)

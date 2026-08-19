@@ -1,13 +1,16 @@
 """
-QR Code routes - CRUD for QR links
+QR Code routes - CRUD, Bulk Operations & Styling for QR links
 """
 import io
+import csv
+import zipfile
 import logging
 from flask import Blueprint, request, jsonify, send_file, current_app
 from flask_login import login_required, current_user
+from sqlalchemy import func
 
 from app.extensions import db, limiter
-from app.models import QrLink, CustomDomain
+from app.models import QrLink, CustomDomain, ScanEvent
 from app.storage import google_drive_provider
 from app.utils.short_code import generate_unique_short_code
 from app.utils.validators import validate_destination_url, sanitize_filename
@@ -21,24 +24,69 @@ def _check_short_code_exists(code: str) -> bool:
     return QrLink.query.filter_by(short_code=code).first() is not None
 
 
-def _generate_qr_image(url: str, fmt: str = "png", scale: int = 10) -> bytes:
-    """Generate a QR code image for the given URL."""
+def _generate_qr_image(url: str, fmt: str = "png", scale: int = 10, style: dict = None) -> bytes:
+    """
+    Generate a QR code image for the given URL with optional custom style.
+    Supports dark/light colors and error correction level H.
+    """
+    style = style or {}
+    dark_color = style.get("fg_color") or style.get("dark") or "#0f172a"
+    light_color = style.get("bg_color") or style.get("light") or "#ffffff"
+
+    # Transparent background support
+    if style.get("transparent_bg"):
+        light_color = None
+
     qr = segno.make(url, error="H")
     buf = io.BytesIO()
+
     if fmt == "svg":
-        qr.save(buf, kind="svg", scale=scale, border=4)
+        qr.save(buf, kind="svg", scale=scale, border=4, dark=dark_color, light=light_color)
     else:
-        qr.save(buf, kind="png", scale=scale, border=4)
+        qr.save(buf, kind="png", scale=scale, border=4, dark=dark_color, light=light_color)
+
     buf.seek(0)
     return buf.read()
+
+
+@qr_bp.route("/projects", methods=["GET"])
+@login_required
+def get_projects_and_tags():
+    """Get all distinct projects/folders and tags for the current user."""
+    projects_query = (
+        db.session.query(QrLink.project_name, func.count(QrLink.id))
+        .filter(QrLink.user_id == current_user.id, QrLink.project_name.isnot(None), QrLink.project_name != "")
+        .group_by(QrLink.project_name)
+        .all()
+    )
+
+    projects = [{"name": p[0], "count": p[1]} for p in projects_query]
+
+    # Collect all unique tags
+    links_with_tags = QrLink.query.filter(
+        QrLink.user_id == current_user.id, QrLink.tags.isnot(None)
+    ).all()
+    tags_count = {}
+    for link in links_with_tags:
+        if isinstance(link.tags, list):
+            for tag in link.tags:
+                tag = str(tag).strip()
+                if tag:
+                    tags_count[tag] = tags_count.get(tag, 0) + 1
+
+    tags = [{"name": k, "count": v} for k, v in sorted(tags_count.items())]
+
+    return jsonify({"projects": projects, "tags": tags})
 
 
 @qr_bp.route("", methods=["GET"])
 @login_required
 def list_qr_codes():
-    """List all QR codes for the current user."""
+    """List all QR codes for the current user with search, filter, and pagination."""
     search = request.args.get("search", "").strip()
     qr_type = request.args.get("type", "").strip()
+    project = request.args.get("project", "").strip()
+    tag = request.args.get("tag", "").strip()
     sort = request.args.get("sort", "newest")  # newest, oldest, most_scanned
     page = int(request.args.get("page", 1))
     per_page = int(request.args.get("per_page", 20))
@@ -51,11 +99,16 @@ def list_qr_codes():
     if qr_type in ("url", "file"):
         query = query.filter_by(type=qr_type)
 
+    if project:
+        query = query.filter_by(project_name=project)
+
+    if tag:
+        # JSON search or fallback
+        query = query.filter(QrLink.tags.cast(db.String).ilike(f"%{tag}%"))
+
     if sort == "oldest":
         query = query.order_by(QrLink.created_at.asc())
     elif sort == "most_scanned":
-        from app.models import ScanEvent
-        from sqlalchemy import func
         query = (
             query.outerjoin(ScanEvent, QrLink.id == ScanEvent.qr_link_id)
             .group_by(QrLink.id)
@@ -80,27 +133,32 @@ def list_qr_codes():
 
 @qr_bp.route("", methods=["POST"])
 @login_required
-@limiter.limit("30 per hour")
+@limiter.limit("60 per hour")
 def create_qr():
-    """Create a new QR code (URL or file)."""
+    """Create a new QR code (URL or file) with optional design studio styles & project."""
     base_url = current_app.config["APP_BASE_URL"]
-
-    # Support both multipart/form-data (file uploads) and application/json
     body = request.get_json(silent=True) or {}
 
-    def get(key, default=""):
-        """Read from form-data first, fall back to JSON body."""
-        return request.form.get(key) or body.get(key, default)
+    def get(key, default=None):
+        return request.form.get(key) if request.form.get(key) is not None else body.get(key, default)
 
     qr_type = get("type")
     if qr_type not in ("url", "file"):
         return jsonify({"error": "Type must be 'url' or 'file'"}), 400
 
-    title = get("title", "").strip()
+    title = (get("title") or "").strip()
     if not title:
         return jsonify({"error": "Title is required"}), 400
     if len(title) > 255:
         return jsonify({"error": "Title is too long (max 255 characters)"}), 400
+
+    project_name = (get("project_name") or "").strip() or None
+    tags = get("tags") or []
+    if isinstance(tags, str):
+        tags = [t.strip() for t in tags.split(",") if t.strip()]
+
+    style_config = get("style_config")
+    inactive_config = get("inactive_config")
 
     # Custom domain
     custom_domain_id = get("custom_domain_id")
@@ -116,7 +174,7 @@ def create_qr():
     short_code = generate_unique_short_code(_check_short_code_exists)
 
     if qr_type == "url":
-        destination_url = get("destination_url", "").strip()
+        destination_url = (get("destination_url") or "").strip()
         valid, err = validate_destination_url(destination_url)
         if not valid:
             return jsonify({"error": err}), 400
@@ -126,6 +184,10 @@ def create_qr():
             short_code=short_code,
             type="url",
             title=title,
+            project_name=project_name,
+            tags=tags,
+            style_config=style_config,
+            inactive_config=inactive_config,
             destination_url=destination_url,
             custom_domain_id=custom_domain.id if custom_domain else None,
         )
@@ -150,7 +212,6 @@ def create_qr():
         max_size = current_app.config["MAX_FILE_SIZE"]
         allowed_mimes = current_app.config["ALLOWED_MIME_TYPES"]
 
-        # Read file data
         file_data = file.read()
         if len(file_data) > max_size:
             return jsonify({"error": f"File too large. Maximum size is {max_size // (1024*1024)}MB"}), 400
@@ -161,21 +222,23 @@ def create_qr():
 
         safe_filename = sanitize_filename(file.filename)
 
-        # Create QR link first to get the short code
         qr_link = QrLink(
             user_id=current_user.id,
             short_code=short_code,
             type="file",
             title=title,
+            project_name=project_name,
+            tags=tags,
+            style_config=style_config,
+            inactive_config=inactive_config,
             original_filename=safe_filename,
             mime_type=mime_type,
             file_size=len(file_data),
             custom_domain_id=custom_domain.id if custom_domain else None,
         )
         db.session.add(qr_link)
-        db.session.flush()  # Get ID without committing
+        db.session.flush()
 
-        # Upload to Google Drive
         try:
             folder_id = google_drive_provider.create_qr_folder(current_user, short_code)
             result = google_drive_provider.upload_file(
@@ -197,6 +260,167 @@ def create_qr():
         return jsonify({"qr_code": qr_link.to_dict(base_url=base_url)}), 201
 
 
+@qr_bp.route("/bulk", methods=["POST"])
+@login_required
+@limiter.limit("20 per hour")
+def bulk_create_qr():
+    """
+    Bulk create QR codes from CSV or JSON array.
+    Expected items: [{"title": "...", "destination_url": "...", "project_name": "...", "tags": [...]}]
+    """
+    base_url = current_app.config["APP_BASE_URL"]
+    items = []
+
+    if "file" in request.files:
+        csv_file = request.files["file"]
+        stream = io.StringIO(csv_file.stream.read().decode("utf-8", errors="ignore"))
+        reader = csv.DictReader(stream)
+        for row in reader:
+            title = row.get("title") or row.get("Title") or row.get("name") or row.get("Name")
+            url = row.get("url") or row.get("URL") or row.get("destination_url") or row.get("link")
+            project = row.get("project") or row.get("project_name") or row.get("folder")
+            tags = row.get("tags") or ""
+            if title and url:
+                items.append({
+                    "title": str(title).strip(),
+                    "destination_url": str(url).strip(),
+                    "project_name": str(project).strip() if project else None,
+                    "tags": [t.strip() for t in str(tags).split(",") if t.strip()],
+                })
+    else:
+        body = request.get_json(silent=True) or {}
+        items = body.get("items", [])
+        project_override = body.get("project_name")
+        style_override = body.get("style_config")
+
+    if not items:
+        return jsonify({"error": "No valid QR items provided"}), 400
+
+    if len(items) > 100:
+        return jsonify({"error": "Maximum 100 QR codes can be created at once"}), 400
+
+    created_links = []
+    errors = []
+
+    for i, item in enumerate(items):
+        title = item.get("title", f"QR {i+1}").strip()
+        destination_url = item.get("destination_url", "").strip()
+
+        valid, err = validate_destination_url(destination_url)
+        if not valid:
+            errors.append(f"Row {i+1} ({title}): {err}")
+            continue
+
+        short_code = generate_unique_short_code(_check_short_code_exists)
+        project = item.get("project_name") or request.json.get("project_name") if request.is_json else None
+        style = item.get("style_config") or (request.json.get("style_config") if request.is_json else None)
+
+        qr_link = QrLink(
+            user_id=current_user.id,
+            short_code=short_code,
+            type="url",
+            title=title,
+            project_name=project,
+            tags=item.get("tags", []),
+            style_config=style,
+            destination_url=destination_url,
+        )
+        db.session.add(qr_link)
+        created_links.append(qr_link)
+
+    db.session.commit()
+    logger.info(f"Bulk created {len(created_links)} QR codes for user {current_user.id}")
+
+    return jsonify({
+        "message": f"Successfully created {len(created_links)} QR codes",
+        "qr_codes": [qr.to_dict(base_url=base_url) for qr in created_links],
+        "errors": errors,
+    }), 201
+
+
+@qr_bp.route("/bulk/actions", methods=["POST"])
+@login_required
+def bulk_actions():
+    """Perform bulk actions: 'pause', 'resume', 'move_project', 'add_tag', 'delete'."""
+    data = request.json or {}
+    action = data.get("action")
+    ids = data.get("ids", [])
+
+    if not ids or not isinstance(ids, list):
+        return jsonify({"error": "IDs array is required"}), 400
+
+    links = QrLink.query.filter(QrLink.id.in_(ids), QrLink.user_id == current_user.id).all()
+    if not links:
+        return jsonify({"error": "No matching QR codes found"}), 404
+
+    if action == "pause":
+        for link in links:
+            link.is_active = False
+    elif action == "resume":
+        for link in links:
+            link.is_active = True
+    elif action == "move_project":
+        project_name = (data.get("project_name") or "").strip() or None
+        for link in links:
+            link.project_name = project_name
+    elif action == "add_tag":
+        tag = (data.get("tag") or "").strip()
+        if tag:
+            for link in links:
+                current_tags = list(link.tags or [])
+                if tag not in current_tags:
+                    current_tags.append(tag)
+                    link.tags = current_tags
+    elif action == "delete":
+        for link in links:
+            db.session.delete(link)
+    else:
+        return jsonify({"error": f"Unknown action '{action}'"}), 400
+
+    db.session.commit()
+    return jsonify({"message": f"Bulk action '{action}' completed for {len(links)} QR codes", "count": len(links)})
+
+
+@qr_bp.route("/bulk/export", methods=["POST"])
+@login_required
+def bulk_export_zip():
+    """Export selected QR codes as a single downloadable ZIP archive containing PNGs or SVGs."""
+    data = request.json or {}
+    ids = data.get("ids", [])
+    fmt = data.get("format", "png").lower()
+    size = int(data.get("size", 10))
+
+    if fmt not in ("png", "svg"):
+        fmt = "png"
+
+    query = QrLink.query.filter(QrLink.user_id == current_user.id)
+    if ids:
+        query = query.filter(QrLink.id.in_(ids))
+
+    qr_links = query.all()
+    if not qr_links:
+        return jsonify({"error": "No QR codes to export"}), 404
+
+    base_url = current_app.config["APP_BASE_URL"]
+    zip_buf = io.BytesIO()
+
+    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for qr in qr_links:
+            pub_url = qr.get_public_url(base_url)
+            img_bytes = _generate_qr_image(pub_url, fmt=fmt, scale=size, style=qr.style_config)
+            clean_title = sanitize_filename(qr.title or qr.short_code)
+            filename = f"{qr.short_code}-{clean_title}.{fmt}"
+            zf.writestr(filename, img_bytes)
+
+    zip_buf.seek(0)
+    return send_file(
+        zip_buf,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name="qonnect-qr-export.zip",
+    )
+
+
 @qr_bp.route("/<int:qr_id>", methods=["GET"])
 @login_required
 def get_qr(qr_id: int):
@@ -209,19 +433,30 @@ def get_qr(qr_id: int):
 @qr_bp.route("/<int:qr_id>", methods=["PATCH"])
 @login_required
 def update_qr(qr_id: int):
-    """Update a QR code (title, destination URL, active status)."""
+    """Update a QR code (title, destination, project, style, inactive page, active status)."""
     qr_link = QrLink.query.filter_by(id=qr_id, user_id=current_user.id).first_or_404()
     base_url = current_app.config["APP_BASE_URL"]
-
     data = request.json or {}
 
     if "title" in data:
-        title = data["title"].strip()
+        title = str(data["title"]).strip()
         if not title:
             return jsonify({"error": "Title cannot be empty"}), 400
         if len(title) > 255:
             return jsonify({"error": "Title too long"}), 400
         qr_link.title = title
+
+    if "project_name" in data:
+        qr_link.project_name = str(data["project_name"]).strip() if data["project_name"] else None
+
+    if "tags" in data:
+        qr_link.tags = data["tags"] if isinstance(data["tags"], list) else []
+
+    if "style_config" in data:
+        qr_link.style_config = data["style_config"]
+
+    if "inactive_config" in data:
+        qr_link.inactive_config = data["inactive_config"]
 
     if "is_active" in data:
         qr_link.is_active = bool(data["is_active"])
@@ -251,9 +486,8 @@ def update_qr(qr_id: int):
 @qr_bp.route("/<int:qr_id>", methods=["DELETE"])
 @login_required
 def delete_qr(qr_id: int):
-    """Delete a QR code (does not delete Drive files by default)."""
+    """Delete a QR code."""
     qr_link = QrLink.query.filter_by(id=qr_id, user_id=current_user.id).first_or_404()
-
     delete_drive_file = request.json.get("delete_drive_file", False) if request.json else False
 
     if qr_link.type == "file" and qr_link.google_drive_file_id and delete_drive_file:
@@ -335,10 +569,9 @@ def replace_file(qr_id: int):
 
 
 @qr_bp.route("/<int:qr_id>/image", methods=["GET"])
-@login_required
 def get_qr_image(qr_id: int):
-    """Get the QR code image as PNG or SVG."""
-    qr_link = QrLink.query.filter_by(id=qr_id, user_id=current_user.id).first_or_404()
+    """Get the QR code image as PNG or SVG with customized styles."""
+    qr_link = QrLink.query.filter_by(id=qr_id).first_or_404()
     fmt = request.args.get("format", "png").lower()
     size = int(request.args.get("size", 10))
 
@@ -351,7 +584,7 @@ def get_qr_image(qr_id: int):
     base_url = current_app.config["APP_BASE_URL"]
     public_url = qr_link.get_public_url(base_url)
 
-    img_data = _generate_qr_image(public_url, fmt=fmt, scale=size)
+    img_data = _generate_qr_image(public_url, fmt=fmt, scale=size, style=qr_link.style_config)
 
     mimetype = "image/png" if fmt == "png" else "image/svg+xml"
     filename = f"qonnect-{qr_link.short_code}.{fmt}"
@@ -367,7 +600,7 @@ def get_qr_image(qr_id: int):
 @qr_bp.route("/<int:qr_id>/download", methods=["GET"])
 @login_required
 def download_file(qr_id: int):
-    """Proxy download a file from Google Drive (does not expose Drive URL to user)."""
+    """Proxy download a file from Google Drive."""
     qr_link = QrLink.query.filter_by(id=qr_id, user_id=current_user.id).first_or_404()
 
     if qr_link.type != "file":
